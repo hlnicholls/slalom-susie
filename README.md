@@ -18,8 +18,7 @@ or:
 ```
 pip install -r requirements.txt
 ```
-
-### Additional software:
+### Additional software:
 ```
 brew install libomp
 export LDFLAGS="-L/opt/homebrew/opt/libomp/lib"
