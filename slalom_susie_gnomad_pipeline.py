@@ -1,23 +1,14 @@
-"""Step to run study locus fine-mapping."""
-
-from __future__ import annotations
-
-from dataclasses import dataclass
-
-import re
-import pyspark.sql.functions as F
-from scipy import stats
+import pandas as pd
+import numpy as np
 import hail as hl
-from hail.linalg import BlockMatrix
+import subprocess
+import re
+import scipy as sp
+import warnings
+warnings.filterwarnings("ignore")
+hl.init()
 
-from otg.common.session import Session
-from otg.config import FinemappingStepConfig
-from otg.dataset.study_locus import StudyLocus
 
-from otg.common.utils import _liftover_loci, convert_gnomad_position_to_ensembl
-from otg.datasource.gnomad import GnomADLDMatrix
-
-@dataclass
 class FinemappingPipeline:
     """Fine-mapping pipeline for an input locus"""
     def __init__(self, gwas_file_path, target, target_chrom, target_pos, lead_snp_ID,
@@ -36,25 +27,34 @@ class FinemappingPipeline:
     """
     Args:
         gwas_file_path (str): Path to the GWAS summary statistics file.
-        target (str): Target trait or gene for fine-mapping.
+        target (str): Locus name (expected in name of all files for a locus)
         target_chrom (int): Chromosome number where the target is located.
         target_pos (int): Position of the target on the chromosome.
-        lead_snp_ID (str): ID of the lead SNP in the locus.
+        lead_snp_ID (str): ID of the lead SNP in the locus - use ":" separator.
         n_sample (int): Sample size used in the GWAS.
         outlier_method (str): The method to use for outlier detection ('DENTIST' or 'CARMA').
-        r2_threshold (float): R-squared threshold for outlier detection.
-        nlog10p_dentist_s_threshold (float): Negative log10 p-value threshold for DENTIST method.
-        window_size (int, optional): Size of the window around the target position. Default is 500000.
+        r2_threshold (float): R-squared threshold for DENTIST outlier detection.
+        nlog10p_dentist_s_threshold (float): Threshold for DENTIST outlier detection.
+        window_size (int, optional): Size of the window around the target position. Default is 500kb.
+
+    Methods:
+        get_ld(): Get raw LD data for a locus (currently from UKBB using PLINK).
+        get_ld_matrix_cor(): Calculate LD matrix correlation (pearsons R2).
+        get_sumstats(): Get locus sumstats and rename columns (need specific names for SuSiE-inf package).
+        match_snps(): Get only SNPs in sumstats that are also present in the LD matrix and vice versa.
+        allele_flip_check(): Check if allele1 and allele2 order matches between sumstats and LD matrix. If not then flip sumstat Z-score sign.
+        get_lead_ld(): Get LD for all variants with lead SNP (needed for DENTIST outlier dection).
+        outlier_detection(): Run either DENTIST or CARMA outlier detection (CARMA work in progress).
+        run_finemapping(): Run fine-mapping method (SuSiE-inf).
     """
 
-    @staticmethod
-    def lift_and_calculate_ld_gnomad(variant_id, chain_file_38_to_37, chain_file_37_to_38):
+    def lift_and_calculate_ld_gnomad(lead_snp_ID):
         bm = BlockMatrix.read("gs://gcp-public-data--gnomad/release/2.1.1/ld/gnomad.genomes.r2.1.1.nfe.common.adj.ld.bm")
         variant_table = hl.read_table("gs://gcp-public-data--gnomad/release/2.1.1/ld/gnomad.genomes.r2.1.1.nfe.common.adj.ld.variant_indices.ht")
         chain_file_38_to_37 = 'gs://hail-common/references/grch38_to_grch37.over.chain.gz'
         chain_file_37_to_38 = 'gs://hail-common/references/grch37_to_grch38.over.chain.gz'
         # Lift over the lead variant from 38 to 37
-        locus = hl.parse_variant(variant_id)
+        locus = hl.parse_variant(lead_snp_ID)
         locus_37 = hl.get_reference('GRCh37').parse_locus(str(locus))
         lifted_locus = hl.liftover(locus_37, chain_file_38_to_37, include_strand=True)
 
@@ -84,59 +84,30 @@ class FinemappingPipeline:
 
         return ld_pyspark_df, snp_ids
 
-
-    def get_ld_matrix(self):
-        """Get LD correlation matrix from hail"""
-        bm = BlockMatrix.read("gs://gcp-public-data--gnomad/release/2.1.1/ld/gnomad.genomes.r2.1.1.nfe.common.adj.ld.bm")
-        variant_table = hl.read_table("gs://gcp-public-data--gnomad/release/2.1.1/ld/gnomad.genomes.r2.1.1.nfe.common.adj.ld.variant_indices.ht")
-        lead_snp = hl.parse_variant("1:90277796:G:A")
-        window_size = 500000
-        filtered_matrix = variant_table.filter(
-            (variant_table.locus.contig == lead_snp.locus.contig) &
-            (hl.abs(variant_table.locus.position - lead_snp.locus.position) <= window_size)
-        )
-        self.variant_ids = filtered_matrix.select(
-            variant_id=hl.str(filtered_matrix.locus) + ":" + hl.delimit(filtered_matrix.alleles, ":")
-        ).variant_id.collect()
-        indices = filtered_matrix.idx.collect()
-        subset_bm = bm.filter(indices, indices)
-        mt_from_bm = subset_bm.to_matrix_table_row_major()
-        mt_from_bm = mt_from_bm.entries()
-        self.ld_matrix = mt_from_bm.to_spark(flatten=True)
-        return
-
     def get_sumstats(self):
-        """Filters and renames the GWAS summary statistics columns."""
+        """Filters and renames the GWAS summary statistics columns (needed for SuSiE)."""
         gwas_file_path = self.gwas_file_path
         target_chrom = self.target_chrom
         start_pos = self.start_pos
         end_pos = self.end_pos
         # Preparing sumstats for filtering and input into SuSiE
-        sumstat = spark.read.csv(gwas_file_path, header=True, sep="\t")
-        sumstat = sumstat.filter(
-            (col('chromosome') == target_chrom) &
-            (col('position') >= start_pos) &
-            (col('position') <= end_pos)
-        )
-        sumstat = sumstat.dropna(subset=['chromosome'])
-
-        sumstat = sumstat.withColumn('z', col('beta') / col('standardError'))
-        # making and renaming columns to match col names needed to run susieinf package
-        # Use variantId to create allele columns
+        sumstat = pd.read_csv(gwas_file_path, sep="\t")
+        sumstat = sumstat[(sumstat['hm_chrom'] == target_chrom) & (sumstat['hm_pos'] >= start_pos) & (sumstat['hm_pos'] <= end_pos)]
+        sumstat = sumstat.dropna(subset=['hm_chrom'])
+        sumstat['z'] = sumstat['beta'] / sumstat['standard_error']
         cols_to_rename = {
             'hm_variant_id': 'ID',
             'hm_rsid': 'rsid',
+            'hm_chrom': 'chromosome',
             'hm_pos': 'position',
             'hm_other_allele': 'allele1',
             'hm_effect_allele': 'allele2',
             'hm_effect_allele_frequency': 'maf',
-            'standardError': 'se',
+            'standard_error': 'se',
             'p_value': 'p'
         }
-        for old_name, new_name in cols_to_rename.items():
-            sumstat = sumstat.withColumnRenamed(old_name, new_name)
-        selected_cols = ['ID', 'rsid', 'chromosome', 'position', 'allele1', 'allele2', 'maf', 'p', 'beta', 'se', 'z']
-        sumstat = sumstat.select(selected_cols)
+        sumstat.rename(columns=cols_to_rename, inplace=True)
+        sumstat = sumstat[['ID', 'rsid', 'chromosome', 'position', 'allele1', 'allele2', 'maf', 'p', 'beta', 'se', 'z']]
         self.sumstat = sumstat
         return
 
@@ -144,26 +115,27 @@ class FinemappingPipeline:
         """Matches SNPs between summary statistics and LD matrix and filters them accordingly."""
         sumstat = self.sumstat
         ld_matrix = self.ld_matrix
-        variant_ids = self.variant_ids
+        ld_data = self.ld_data
         # Getting only SNPs in sumstats that are also in the LD matrix
         # Get SNP IDs from ld matrix to compare with sumstat SNP IDs
-        # Regex pattern for extracting position from SNP
         pattern = re.compile(r"(^\d+)|(?<=:)\d+(?=:|$)")
-        ld_data_spark = ld_data_spark.withColumn("position", F.regexp_extract(F.col("SNP"), pattern, 0))
-        ld_data_spark = ld_data_spark.withColumn("ID", F.regexp_replace(F.col("SNP"), r'[:,_]', '_'))
+        df1_transpose = ld_data.T.reset_index()
+        df1_transpose.columns = ['SNP'] + list(df1_transpose.columns[1:])
+        df1_transpose['position'] = df1_transpose['SNP'].apply(lambda x: re.search(pattern, x).group())
+        df1_transpose['ID'] = df1_transpose['SNP'].str.replace(r'[:,_]', '_').str.replace(r'_[^_]+$', '')
+        concordance_test = pd.merge(sumstat, df1_transpose, on='ID')
 
-        # Join sumstat with ld_data on 'ID'
-        concordance_test = sumstat.join(ld_data_spark, 'ID', 'inner')
-
-        # Filter sumstat and ld_matrix for ID matches only
-        sumstat_filtered = sumstat.filter(F.col("ID").isin(concordance_test.select("ID").distinct().rdd.flatMap(lambda x: x).collect()))
-        ld_matrix_filtered = ld_matrix_spark.filter(F.col("ID").isin(concordance_test.select("ID").distinct().rdd.flatMap(lambda x: x).collect()))
-
+        # Filter sumstat and LD matrix for ID matches only
+        sumstat_filtered = sumstat[sumstat['ID'].isin(concordance_test['ID'])]
+        sumstat_filtered.reset_index(drop=True, inplace=True)
+        ld_matrix_filtered = ld_matrix.loc[concordance_test['SNP'], concordance_test['SNP']]
+        self.sumstat_filtered = sumstat_filtered
+        self.ld_matrix_filtered = ld_matrix_filtered
+        self.concordance_test = concordance_test
         return
 
-    def outlier_detection_pyspark(self):
+    def outlier_detection(self):
         """Performs outlier detection using the specified method."""
-        # Assuming these are already defined and initialized elsewhere in your code
         sumstat = self.sumstat
         outlier_method = self.outlier_method
         target = self.target
@@ -171,29 +143,34 @@ class FinemappingPipeline:
         lead_snp_ID = self.lead_snp_ID
         r2_threshold = self.r2_threshold
         nlog10p_dentist_s_threshold = self.nlog10p_dentist_s_threshold
-
         if outlier_method == 'DENTIST':
-            # get study locus with columsn: r2 with lead snp, beta, se, z
-            # Calculate 'r'
-            df = df.withColumn('r', (F.sum('R2') * n_sample) / (F.count('R2') * n_sample))
-
-            lead_idx_snp_row = df.filter(df.ID == lead_snp_ID).collect()[0]
-            lead_z = lead_idx_snp_row.beta / lead_idx_snp_row.se
+            # 1. Getting R2 column for sumstats
+            # LD for all variants with lead SNP needs to be previously calculated by plink
+            ld = pd.read_csv(f'/Users/hn9/Documents/GitHub/fine-mapping-inf/susieinf/loci/ld/{target}_subset_for_ld_calculation.ld', sep='\s+')
+            lead_ld = ld[(ld['SNP_A'] == f'{lead_snp_ID}') | (ld['SNP_B'] == f'{lead_snp_ID}')]
+            sumstat = pd.read_csv(f'/Users/hn9/Documents/GitHub/fine-mapping-inf/susieinf/loci/{target}_locus_sumstat_flip_check.txt.gz', sep='\t')
+            sumstat['ID'] = sumstat['ID'].str.replace("_", ":")
+            merged = pd.merge(lead_ld, sumstat[['ID']], left_on='SNP_B', right_on='ID')
+            df = merged[['ID', 'R2']]
+            df = pd.merge(sumstat, merged, on='ID', how='left')
+            df['r'] = (n_sample * df['R2'].sum()) / (n_sample * df['R2'].count())
+            lead_idx_snp = df.index[df['ID'] == lead_snp_ID].tolist()[0]
 
             # 2. Calculate 't_dentist_s' and 'dentist_outlier'
-            df = df.withColumn("t_dentist_s", ((df.beta / df.se - df.r * lead_z)**2) / (1 - df.r**2))
-            df = df.withColumn("t_dentist_s", F.when(df["t_dentist_s"] < 0, float('inf')).otherwise(df["t_dentist_s"]))
-            def calc_nlog10p_dentist_s(t_dentist_s):
-                return stats.chi2.logsf(t_dentist_s, df=1) / -np.log(10)
-            calc_nlog10p_dentist_s_udf = F.udf(calc_nlog10p_dentist_s, DoubleType())
-            df = df.withColumn("nlog10p_dentist_s", calc_nlog10p_dentist_s_udf("t_dentist_s"))
-
-            # Count the number of DENTIST outliers
-            n_dentist_s_outlier = df.filter((df.R2 > r2_threshold) & (df.nlog10p_dentist_s > nlog10p_dentist_s_threshold)).count()
-            print(f'Number of DENTIST outliers detected: {n_dentist_s_outlier}')
-            df = df.withColumn('dentist_outlier', F.when((df.R2 > r2_threshold) & (df.nlog10p_dentist_s > nlog10p_dentist_s_threshold), 1).otherwise(0))
-            df = df.drop('CHR_A', 'BP_A', 'SNP_A', 'CHR_B', 'BP_B', 'SNP_B')
-            df.write.csv(f'{target}_locus_sumstat_with_dentist.txt.gz', sep='\t', header=True)
+            # Copied and unaltered from https://github.com/mkanai/slalom/blob/master/slalom.py
+            lead_z = (df.beta / df.se).iloc[lead_idx_snp]
+            df["t_dentist_s"] = ((df.beta / df.se) - df.r * lead_z) ** 2 / (1 - df.r ** 2)
+            df["t_dentist_s"] = np.where(df["t_dentist_s"] < 0, np.inf, df["t_dentist_s"])
+            df["t_dentist_s"].iloc[lead_idx_snp] = np.nan
+            df["nlog10p_dentist_s"] = sp.stats.chi2.logsf(df["t_dentist_s"], df=1) / -np.log(10)
+            n_dentist_s_outlier = np.sum(
+                        (df.R2 > r2_threshold) & (df.nlog10p_dentist_s > nlog10p_dentist_s_threshold)
+                    )
+            print('Number of DENTIST outliers detected:', n_dentist_s_outlier)
+            # Identifying outliers
+            df['dentist_outlier'] = np.where((df.R2 > r2_threshold) & (df.nlog10p_dentist_s > nlog10p_dentist_s_threshold), 1, 0)
+            df = df.drop(['CHR_A', 'BP_A', 'SNP_A', 'CHR_B', 'BP_B', 'SNP_B'], axis=1)
+            df.to_csv(f'{target}_locus_sumstat_with_dentist.txt.gz', sep='\t', index=False)
 
         elif outlier_method == 'CARMA':
             # unfinished work in progress
@@ -239,4 +216,26 @@ class FinemappingPipeline:
             --output-prefix  {target}_locus """
 
         subprocess.run(susieinf_command, shell=True)
+        #zip_comamnd = f"""gunzip -c {target}_locus.susieinf.bgz > {target}_locus.txt"""
+        #subprocess.run(zip_comamnd, shell=True)
         return
+
+    def run_pipeline(self):
+        self.get_sumstats()
+        self.match_snps()
+        self.outlier_detection()
+        self.run_finemapping()
+
+if __name__ == "__main__":
+    pipeline = FinemappingPipeline(
+        gwas_file_path="/Users/hn9/Documents/Analysis/FM-comparison/gwas-examples/PTK2B-Alzh/33589840-GCST90012877-EFO_0000249.h.tsv.gz",
+        target="PTK2B",
+        target_chrom=8,
+        target_pos=27610986,
+        lead_snp_ID="8:27610986:C:A",
+        n_sample=472868,
+        outlier_method='DENTIST',
+        r2_threshold = 0.6,
+        nlog10p_dentist_s_threshold = 1e-4
+    )
+    pipeline.run_pipeline()
