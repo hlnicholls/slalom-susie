@@ -25,15 +25,15 @@ class FinemappingPipeline:
     """
     Args:
         gwas_file_path (str): Path to the GWAS summary statistics file.
-        target (str): Target trait or gene for fine-mapping.
+        target (str): Locus name (expected in name of all files for a locus)
         target_chrom (int): Chromosome number where the target is located.
         target_pos (int): Position of the target on the chromosome.
-        lead_snp_ID (str): ID of the lead SNP in the locus.
+        lead_snp_ID (str): ID of the lead SNP in the locus - use ":" separator.
         n_sample (int): Sample size used in the GWAS.
         outlier_method (str): The method to use for outlier detection ('DENTIST' or 'CARMA').
-        r2_threshold (float): R-squared threshold for outlier detection.
-        nlog10p_dentist_s_threshold (float): Negative log10 p-value threshold for DENTIST method.
-        window_size (int, optional): Size of the window around the target position. Default is 500000.
+        r2_threshold (float): R-squared threshold for DENTIST outlier detection.
+        nlog10p_dentist_s_threshold (float): Threshold for DENTIST outlier detection.
+        window_size (int, optional): Size of the window around the target position. Default is 500kb.
     """
 
     def get_ld(self):
@@ -41,8 +41,8 @@ class FinemappingPipeline:
         command = f"plink --bfile /Users/hn9/Documents/Analysis/FM-comparison/ukb_v3_downsampled10k/ukb_v3_chr{self.target_chrom}.downsampled10k --allow-extra-chr --recode A --chr {self.target_chrom} --from-bp {self.start_pos} --to-bp {self.end_pos} --maf 0.001 --out {self.target}_locus_UKBB.txt"
         subprocess.run(command, shell=True)
 
-    def get_ld_matrix(self):
-        """Calculates the LD matrix based on the LD data from PLINK"""
+    def get_ld_matrix_cor(self):
+        """Calculates the LD matrix correlation based on the LD data from PLINK"""
         # Calculate LD correlation
         ld_data = pd.read_csv(f"{self.target}_locus_UKBB.txt.raw", delim_whitespace=True)
         ld_data = ld_data.drop(columns=["FID", "IID", "PAT", "MAT", "SEX", "PHENOTYPE"])
@@ -54,7 +54,7 @@ class FinemappingPipeline:
         return
 
     def get_sumstats(self):
-        """Filters and renames the GWAS summary statistics columns."""
+        """Filters and renames the GWAS summary statistics columns (needed for SuSiE)."""
         gwas_file_path = self.gwas_file_path
         target_chrom = self.target_chrom
         start_pos = self.start_pos
@@ -140,7 +140,7 @@ class FinemappingPipeline:
         return
 
     def get_lead_ld(self):
-        """Runs a shell command to get the LD of the lead SNP using PLINK."""
+        """Runs a shell command to get the LD with just the lead SNP using PLINK."""
         target = self.target
         target_chrom = self.target_chrom
         lead_snp_ID = self.lead_snp_ID
@@ -244,7 +244,7 @@ class FinemappingPipeline:
 
     def run_pipeline(self):
         self.get_ld()
-        self.get_ld_matrix()
+        self.get_ld_matrix_cor()
         self.get_sumstats()
         self.match_snps()
         self.allele_flip_check()
