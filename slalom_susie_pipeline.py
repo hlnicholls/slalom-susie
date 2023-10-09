@@ -34,6 +34,16 @@ class FinemappingPipeline:
         r2_threshold (float): R-squared threshold for DENTIST outlier detection.
         nlog10p_dentist_s_threshold (float): Threshold for DENTIST outlier detection.
         window_size (int, optional): Size of the window around the target position. Default is 500kb.
+
+    Methods:
+        get_ld(): Get raw LD data for a locus (currently from UKBB using PLINK).
+        get_ld_matrix_cor(): Calculate LD matrix correlation (pearsons R2).
+        get_sumstats(): Get locus sumstats and rename columns (need specific names for SuSiE-inf package).
+        match_snps(): Get only SNPs in sumstats that are also present in the LD matrix and vice versa.
+        allele_flip_check(): Check if allele1 and allele2 order matches between sumstats and LD matrix. If not then flip sumstat Z-score sign.
+        get_lead_ld(): Get LD for all variants with lead SNP (needed for DENTIST outlier dection).
+        outlier_detection(): Run either DENTIST or CARMA outlier detection (CARMA work in progress).
+        run_finemapping(): Run fine-mapping method (SuSiE-inf).
     """
 
     def get_ld(self):
