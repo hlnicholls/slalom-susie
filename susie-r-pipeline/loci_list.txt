@@ -1,0 +1,5 @@
+alt	beta	chrom	clump_method	pos	pval	ref	se	study_id	type	variant_id	target
+A	0.7508	1	conditional	155162560	5.02E-30	G	0.0659	nalls_et_al	gwas	1:155162560:G:A	1_155162560_G_A
+C	-0.1492	1	conditional	205687325	4.10E-10	G	0.0239	nalls_et_al	gwas	1:205687325:G:C	1_205687325_G_C
+G	-0.1233	2	conditional	134779549	2.09E-12	T	0.0175	nalls_et_al	gwas	2:134779549:T:G	2_134779549_T_G
+G	0.1784	2	conditional	168263099	6.22E-13	C	0.0248	nalls_et_al	gwas	2:168263099:C:G	2_168263099_C_G

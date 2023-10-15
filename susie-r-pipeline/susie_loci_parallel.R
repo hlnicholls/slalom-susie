@@ -142,7 +142,10 @@ foreach(i = 1:nrow(lead_snps), .packages = c("data.table", "dplyr", "stringr", "
   
   lead <- df[df$ID == target, ]
   lead_z <- lead$Z
-  
+  #  Error in for loop when running normal calc:
+  #df$t_dentist_s <- (df$Z - df$r*lead_z)^2 / (1 - df$r^2)
+  # Fixing with for loop:
+  results_list <- list()
   for (i in 1:nrow(df)) {
     Z <- df$Z[i]
     r <- df$r[i]

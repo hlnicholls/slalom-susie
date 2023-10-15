@@ -1,6 +1,15 @@
-library(susieR)
+library(CARMA)
 library(data.table)
+library(magrittr)
 library(dplyr)
+library(devtools)
+library(R.utils)
+library(Matrix)
+library(MASS)
+library(Rcpp)
+library(RcppArmadillo)
+library(RcppGSL)
+library(glmnet)
 library(stringr)
 library(tidyr)
 library(reticulate)
@@ -24,7 +33,7 @@ num_workers <- 16
 cl <- makeCluster(num_workers)
 registerDoParallel(cl)
 
-foreach(i = 1:nrow(lead_snps), .packages = c("data.table", "dplyr", "stringr", "tidyr", "reticulate", "susieR")) %dopar% {
+foreach(i = 1:nrow(lead_snps), .packages = c("data.table", "dplyr", "stringr", "tidyr", "reticulate", "CARMA")) %dopar% {
   target <- lead_snps[i, "target"]
   target_chrom <- lead_snps[i, "chrom"]
   ######################################################################################################
