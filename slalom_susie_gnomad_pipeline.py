@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 import hail as hl
+from hail.linalg import BlockMatrix
 import subprocess
 import re
 import scipy as sp
@@ -48,41 +49,46 @@ class FinemappingPipeline:
         run_finemapping(): Run fine-mapping method (SuSiE-inf).
     """
 
-    def lift_and_calculate_ld_gnomad(lead_snp_ID):
+    def get_gnomad_ld_matrix(lead_snp_ID):
         bm = BlockMatrix.read("gs://gcp-public-data--gnomad/release/2.1.1/ld/gnomad.genomes.r2.1.1.nfe.common.adj.ld.bm")
         variant_table = hl.read_table("gs://gcp-public-data--gnomad/release/2.1.1/ld/gnomad.genomes.r2.1.1.nfe.common.adj.ld.variant_indices.ht")
-        chain_file_38_to_37 = 'gs://hail-common/references/grch38_to_grch37.over.chain.gz'
-        chain_file_37_to_38 = 'gs://hail-common/references/grch37_to_grch38.over.chain.gz'
-        # Lift over the lead variant from 38 to 37
-        locus = hl.parse_variant(lead_snp_ID)
-        locus_37 = hl.get_reference('GRCh37').parse_locus(str(locus))
-        lifted_locus = hl.liftover(locus_37, chain_file_38_to_37, include_strand=True)
+        locus = hl.parse_variant(lead_snp_ID).locus
+        temp_table = hl.Table.parallelize([hl.struct(locus=locus)])
+        locus_values = temp_table.select('locus').collect()
+        locus_value = locus_values[0].locus
+        contig = locus_value.contig
+        position = locus_value.position
+        locus_37 = hl.liftover(hl.locus(contig, position, 'GRCh38'), 'GRCh37')
 
-        # Get locus from gnomad LD matrix
         window_size = 500000
-        relevant_variants = variant_table.filter(
-            (hl.abs(variant_table.locus.position - lifted_locus.result.position) <= window_size) &
-            (variant_table.locus.contig == lifted_locus.result.contig)
+        locus_variants = variant_table.filter(
+            (hl.abs(variant_table.locus.position - locus_37.position) <= window_size) &
+            (variant_table.locus.contig == locus_37.contig)
         )
-        indices = relevant_variants['index'].collect()
+
+        # Get LD matrix
+        indices = locus_variants['idx'].collect()
         sub_bm = bm.filter(indices, indices)
+        numpy_array = sub_bm.to_numpy()
+        # need to change to iteritems due to old pandas version error
+        ld_df.iteritems = ld_df.items
+        ld_df = pd.DataFrame(numpy_array)
+        ld_pyspark_df = spark.createDataFrame(ld_df)
 
-        # Lift over variants from 37 to 38
-        lifted_variants = [
-            hl.liftover(hl.locus(relevant_variants.locus.contig, x), chain_file_37_to_38).result
-            for x in relevant_variants.locus.position.collect()
-        ]
+        # Get SNP IDs in GRCh38
+        locus_variants = locus_variants.annotate(
+            locus_38 = hl.liftover(locus_variants.locus, 'GRCh38')
+        )
+        locus_variants = locus_variants.annotate(
+            snp_id_38 = hl.str(locus_variants.locus_38.contig) + "_" +
+                        hl.str(locus_variants.locus_38.position) + "_" +
+                        locus_variants.alleles[0] + "_" +
+                        locus_variants.alleles[1]
+        )
+        snp_ids_38 = locus_variants['snp_id_38'].collect()
 
-        # Get all SNP IDs in locus
-        snp_ids = [
-            f"{locus.contig}_{locus.position}_{alleles[0]}_{alleles[1]}"
-            for locus, alleles in lifted_variants
-        ]
+        return ld_pyspark_df, snp_ids_38
 
-        ld_df = hl.block_matrix_to_pandas(sub_bm)
-        ld_pyspark_df = hl.pandas_to_spark(ld_df)
-
-        return ld_pyspark_df, snp_ids
 
     def get_sumstats(self):
         """Filters and renames the GWAS summary statistics columns (needed for SuSiE)."""
