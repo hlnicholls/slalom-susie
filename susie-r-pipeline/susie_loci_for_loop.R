@@ -4,8 +4,6 @@ library(dplyr)
 library(stringr)
 library(tidyr)
 library(reticulate)
-library(foreach)
-library(doParallel)
 set.seed(1)
 
 #Check-list to run
@@ -15,22 +13,23 @@ set.seed(1)
 #check sample size input for susie
 
 #need list of lead snps, lead snp ID expected to be in file name of LD matrix and sumstats
-lead_snps <- fread('/Users/hn9/Documents/Analysis/Automated Scripts/susie-r/loci_list.txt')
+lead_snps <- fread('./susie-r-pipeline/loci_list.txt')
 lead_snps$target <- paste(lead_snps$chrom, lead_snps$pos, lead_snps$ref, lead_snps$alt, sep = "_")
 
-# Define the number of workers (adjust the value based on available CPU cores)
-num_workers <- 16
-
-cl <- makeCluster(num_workers)
-registerDoParallel(cl)
+# set threshold for DENTIST outlier detection
+nlog10p_dentist_s_threshold <- 1e-4
+r2_threshold <- 0.6
 
 for (i in 1:nrow(lead_snps)) {
-  target <- lead_snps[i, "target"]
-  target_chrom <- lead_snps[i, "chrom"]
+  target <- as.character(lead_snps[i, "target"])
+  target_chrom <- as.character(lead_snps[i, "chrom"])
+  
+  cat(target, "iteration started\n")
+  start_time <- Sys.time()
   ######################################################################################################
   # Read in sumstats and LD for locus (using lead SNP ID for target file name)
   
-  setwd("/Users/hn9/Documents/Analysis/Automated Scripts/susie-r/loci")
+  setwd("./susie-r-pipeline/loci")
   sumstat <- fread(paste0(target, '_locus_sumstat_flip_check.txt.gz'),
                    sep = "\t", header = TRUE, check.names = FALSE, data.table = FALSE,
                    stringsAsFactors = FALSE)
@@ -38,7 +37,7 @@ for (i in 1:nrow(lead_snps)) {
   ld <- fread(paste0(target, '_locus_ukbb_ld.txt.gz'),
               sep = "\t", header = TRUE, check.names = FALSE, data.table = FALSE,
               stringsAsFactors = FALSE)
-  setwd("/Users/hn9/Documents/Analysis/Automated Scripts/susie-r/intermediate-results")
+  setwd("./susie-r-pipeline/intermediate-results")
   ######################################################################################################
   ## Viewing if there is allele concordance between LD matrix and sum stats ##
   df1_transpose <- t(ld) # ld dataframe needs SNP IDs in columns
@@ -141,31 +140,21 @@ for (i in 1:nrow(lead_snps)) {
   print(dim(df))
   print('ld matrix dim:')
   print(dim(matrix_filtered))
-  ############################
-  # 2. Calculate 't_dentist_s'
-  ############################
+  ####################################################
+  # 2. Calculate 't_dentist_s' and 'nlog10p_dentist_s'
+  ####################################################
   
   n_samples_constant <- 500000
   df$r <- (n_samples_constant * sum(df$R2, na.rm = TRUE)) / (n_samples_constant * sum(!is.na(df$R2)))
   
   lead <- df[df$ID == target, ]
   lead_z <- lead$Z
-  
-  results_list <- list()
-  
-  #  Error in for loop when running normal calc:
-  #df$t_dentist_s <- (df$Z - df$r*lead_z)^2 / (1 - df$r^2)
-  # Fixing with for loop:
-  for (i in 1:nrow(df)) {
-    Z <- df$Z[i]
-    r <- df$r[i]
-    lead_z <- lead$Z[i]
-    result <- (Z - r * lead_z)^2 / (1 - r^2)
-    results_list[[i]] <- result
-  }
-  
-  df$t_dentist_s <- results_list
-  df$dentist_outlier <- as.integer(df$t_dentist_s < 1e-4 & df$R2 > 0.6)
+
+  df$t_dentist_s <- (df$Z - df$r*lead_z)^2 / (1 - df$r^2)
+  df$nlog10p_dentist_s <- pchisq(df$t_dentist_s, df = 1, lower.tail = FALSE) / (-log10(10))
+  n_dentist_s_outlier <- sum(df$R2 > r2_threshold & df$nlog10p_dentist_s > nlog10p_dentist_s_threshold)
+  cat(target, 'Number of DENTIST outliers detected:', n_dentist_s_outlier, '\n')
+  df$dentist_outlier <- ifelse(df$R2 > r2_threshold & df$nlog10p_dentist_s > nlog10p_dentist_s_threshold, 1, 0)
   fwrite(df, paste0(target, '_locus_sumstat_flipcheck_with_dentist.txt.gz'), sep = '\t')
   
   print('After DENTIST:')
@@ -175,19 +164,16 @@ for (i in 1:nrow(lead_snps)) {
   print('ld matrix dim:')
   print(dim(matrix_filtered))
   
-  
   ######################################################################################################
   
   ######################################################################################################
   ## SuSiE Fine-mapping ##
-  sumstat <- df
-  ld <- matrix_filtered
-  z_vector <- unlist(sumstat$Z)
+  z_vector <- unlist(df$Z)
   ld_matrix <- as.matrix(matrix_filtered)
   fitted <- susie_rss(z = z_vector, R = ld_matrix, n = 500000,  L = 10)
   
   sets <- susie_get_cs(fitted,
-                       X = sumstat,
+                       X = df,
                        coverage = 0.9,
                        min_abs_corr = 0.1)
   
@@ -208,11 +194,13 @@ for (i in 1:nrow(lead_snps)) {
   combined_results <- combined_results %>%
     rowwise() %>%
     mutate(
-      ID = sumstat$ID[position],
-      PValue = sumstat$pval[position] 
+      ID = df$ID[position],
+      PValue = df$pval[position],
+      Z = df$Z[position],
+      dentist_outlier = df$dentist_outlier[position]
     )
   
-  setwd("/Users/hn9/Documents/Analysis/Automated Scripts/susie-r/results")
+  setwd("./susie-r-pipeline/results")
   fwrite(
     x = combined_results,
     file = paste0(target, '_susie_locus_ukbb.txt.gz'),
@@ -223,6 +211,8 @@ for (i in 1:nrow(lead_snps)) {
     col.names = TRUE,
     compress = "gzip"
   )
+  end_time <- Sys.time()
+  cat(target, "iteration completed in", round(end_time - start_time, 2), "seconds\n")
   
 }
 

@@ -116,9 +116,9 @@ merged$ID <- gsub(":", "_", merged$ID)
 merged <- select(merged, 'ID', 'R2')
 df <- merge(sumstat, merged, by='ID', all.x=TRUE)
 
-############################
-# 2. Calculate 't_dentist_s'
-############################
+####################################################
+# 2. Calculate 't_dentist_s' and 'nlog10p_dentist_s'
+####################################################
 
 n_samples_constant <- 500000
 df$r <- (n_samples_constant * sum(df$R2, na.rm = TRUE)) / (n_samples_constant * sum(!is.na(df$R2)))
@@ -127,7 +127,15 @@ lead <- df[df$ID == target, ]
 lead_z <- lead$Z
 
 df$t_dentist_s <- (df$Z - df$r* lead_z)^2 / (1 - df$r^2)
-df$dentist_outlier <- as.integer(df$t_dentist_s < 1e-4 & df$R2 > 0.6)
+
+nlog10p_dentist_s_threshold <- 1e-4
+r2_threshold <- 0.6
+
+df$nlog10p_dentist_s <- pchisq(df$t_dentist_s, df = 1, lower.tail = FALSE) / (-log10(10))
+n_dentist_s_outlier <- sum(df$R2 > r2_threshold & df$nlog10p_dentist_s > nlog10p_dentist_s_threshold)
+print(target)
+cat('Number of DENTIST outliers detected:', n_dentist_s_outlier, '\n')
+df$dentist_outlier <- ifelse(df$R2 > r2_threshold & df$nlog10p_dentist_s > nlog10p_dentist_s_threshold, 1, 0)
 fwrite(df, paste0(target, '_locus_sumstat_flipcheck_with_dentist.txt.gz'), sep = '\t')
 
 ######################################################################################################
@@ -166,7 +174,9 @@ combined_results <- combined_results %>%
   rowwise() %>%
   mutate(
     ID = sumstat$ID[position],
-    PValue = sumstat$pval[position] 
+    PValue = sumstat$pval[position],
+    Z = sumstat$Z[position],
+    dentist_outlier = sumstat$dentist_outlier[position]
   )
 
 setwd("/Users/hn9/Documents/Analysis/Automated Scripts/susie-r/results")

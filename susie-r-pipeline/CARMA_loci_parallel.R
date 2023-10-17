@@ -28,14 +28,19 @@ lead_snps <- fread('/Users/hn9/Documents/Analysis/Automated Scripts/susie-r/loci
 lead_snps$target <- paste(lead_snps$chrom, lead_snps$pos, lead_snps$ref, lead_snps$alt, sep = "_")
 
 # Define the number of workers (adjust the value based on available CPU cores)
-num_workers <- 16
+num_workers <- 4
 
 cl <- makeCluster(num_workers)
 registerDoParallel(cl)
 
+# set threshold for DENTIST outlier detection
+nlog10p_dentist_s_threshold <- 1e-4
+r2_threshold <- 0.6
+
 foreach(i = 1:nrow(lead_snps), .packages = c("data.table", "dplyr", "stringr", "tidyr", "reticulate", "CARMA")) %dopar% {
-  target <- lead_snps[i, "target"]
-  target_chrom <- lead_snps[i, "chrom"]
+  target <- as.character(lead_snps[i, "target"])
+  target_chrom <- as.character(lead_snps[i, "chrom"])
+  
   ######################################################################################################
   # Read in sumstats and LD for locus (using lead SNP ID for target file name)
   
@@ -97,7 +102,6 @@ foreach(i = 1:nrow(lead_snps), .packages = c("data.table", "dplyr", "stringr", "
   fwrite(sumstat_flip, paste0(target, '_locus_sumstat_flip_check.txt.gz'), sep = '\t')
   fwrite(matrix_filtered, paste0(target, '_locus_ukbb_ld.txt.gz'), sep = '\t', row.names=FALSE, col.names = FALSE)
   
-  cat(paste(target, 'sumstat shape:', dim(sumstat_flip), 'ld matrix shape:', dim(sumstat_flip)))
   ######################################################################################################
   
   ######################################################################################################
@@ -142,44 +146,33 @@ foreach(i = 1:nrow(lead_snps), .packages = c("data.table", "dplyr", "stringr", "
   merged <- select(merged, 'ID', 'R2')
   df <- merge(sumstat, merged, by='ID', all.x=TRUE)
   
-  ############################
-  # 2. Calculate 't_dentist_s'
-  ############################
-  
+  ####################################################
+  # 2. Calculate 't_dentist_s' and 'nlog10p_dentist_s'
+  ####################################################
   n_samples_constant <- 500000
   df$r <- (n_samples_constant * sum(df$R2, na.rm = TRUE)) / (n_samples_constant * sum(!is.na(df$R2)))
   
   lead <- df[df$ID == target, ]
   lead_z <- lead$Z
-  #  Error in for loop when running normal calc:
-  #df$t_dentist_s <- (df$Z - df$r*lead_z)^2 / (1 - df$r^2)
-  # Fixing with for loop:
-  results_list <- list()
-  for (i in 1:nrow(df)) {
-    Z <- df$Z[i]
-    r <- df$r[i]
-    lead_z <- lead$Z[i]
-    result <- (Z - r * lead_z)^2 / (1 - r^2)
-    results_list[[i]] <- result
-  }
   
-  df$t_dentist_s <- results_list
-  df$dentist_outlier <- as.integer(df$t_dentist_s < 1e-4 & df$R2 > 0.6)
+  df$t_dentist_s <- (df$Z - df$r*lead_z)^2 / (1 - df$r^2)
+  df$nlog10p_dentist_s <- pchisq(df$t_dentist_s, df = 1, lower.tail = FALSE) / (-log10(10))
+  n_dentist_s_outlier <- sum(df$R2 > r2_threshold & df$nlog10p_dentist_s > nlog10p_dentist_s_threshold)
+  cat(target, 'Number of DENTIST outliers detected:', n_dentist_s_outlier, '\n')
+  df$dentist_outlier <- ifelse(df$R2 > r2_threshold & df$nlog10p_dentist_s > nlog10p_dentist_s_threshold, 1, 0)
   fwrite(df, paste0(target, '_locus_sumstat_flipcheck_with_dentist.txt.gz'), sep = '\t')
-  cat(paste(target, 'sumstat with dentist shape:', dim(df), 'ld matrix shape:', dim(matrix_filtered)))
+  cat(paste(target, 'Dimensions after DENTIST\n', 'sumstat shape:', dim(sumstat_flip),'\n', 'ld matrix shape:', dim(sumstat_flip)), file = stdout())
   ######################################################################################################
   
   ######################################################################################################
   ## CARMA Fine-mapping ##
-  sumstat <- df
-  ld <- matrix_filtered
-  sumstat$Z <- as.numeric(sumstat$Z)
+  df$Z <- as.numeric(df$Z)
   ld <- as.matrix(ld)
   z.list <- list()
   ld.list <- list()
   lambda.list <- list()
-  z.list[[1]] <- sumstat$Z
-  ld.list[[1]] <- as.matrix(ld)
+  z.list[[1]] <- df$Z
+  ld.list[[1]] <- as.matrix(matrix_filtered)
   lambda.list[[1]] <- 1
   
   CARMA.results <- CARMA(z.list, ld.list, lambda.list = lambda.list,
@@ -195,7 +188,7 @@ foreach(i = 1:nrow(lead_snps), .packages = c("data.table", "dplyr", "stringr", "
   }
   
   sumstat.result$CM <- ifelse(row.names(sumstat.result) %in% CARMA.results[[1]]$`Credible model`[[1]][[1]], 1, 0)
-  sumstat.result$Outlier <- ifelse(row.names(sumstat.result) %in% CARMA.results[[1]]$Outlier$Index, 1, 0)
+  sumstat.result$CARMA_Outlier <- ifelse(row.names(sumstat.result) %in% CARMA.results[[1]]$Outlier$Index, 1, 0)
   
   setwd("/Users/hn9/Documents/Analysis/Automated Scripts/susie-r/results")
   fwrite(
