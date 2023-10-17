@@ -21,6 +21,6 @@ Scripts:
 
 - Working directories need to be changed in the scripts before running.
 
-- Check column namnes referred to in the script match the column names of the input data (e.g. 'chromosome' versus 'chrom' etc.)
+- Check column names referred to in the script match the column names of the input data (e.g. 'chromosome' versus 'chrom' etc.)
 
-- Additional considerations: sample size is set for DENTIST and susie. DENTIST thresholds are currently those used in SLALOM.
+- Additional considerations: sample size set for DENTIST and susie. DENTIST thresholds are currently those used in SLALOM package.
