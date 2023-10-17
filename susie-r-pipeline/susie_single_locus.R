@@ -133,6 +133,8 @@ r2_threshold <- 0.6
 
 df$nlog10p_dentist_s <- pchisq(df$t_dentist_s, df = 1, lower.tail = FALSE) / (-log10(10))
 n_dentist_s_outlier <- sum(df$R2 > r2_threshold & df$nlog10p_dentist_s > nlog10p_dentist_s_threshold)
+# other threshold option in SLALOM paper:
+#n_dentist_s_outlier <- sum(df$R2 > df$t_dentist_s)
 print(target)
 cat('Number of DENTIST outliers detected:', n_dentist_s_outlier, '\n')
 df$dentist_outlier <- ifelse(df$R2 > r2_threshold & df$nlog10p_dentist_s > nlog10p_dentist_s_threshold, 1, 0)

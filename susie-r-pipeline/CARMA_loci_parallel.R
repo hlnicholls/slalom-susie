@@ -158,6 +158,9 @@ foreach(i = 1:nrow(lead_snps), .packages = c("data.table", "dplyr", "stringr", "
   df$t_dentist_s <- (df$Z - df$r*lead_z)^2 / (1 - df$r^2)
   df$nlog10p_dentist_s <- pchisq(df$t_dentist_s, df = 1, lower.tail = FALSE) / (-log10(10))
   n_dentist_s_outlier <- sum(df$R2 > r2_threshold & df$nlog10p_dentist_s > nlog10p_dentist_s_threshold)
+  # other threshold option in SLALOM paper:
+  #n_dentist_s_outlier <- sum(df$R2 > df$t_dentist_s)
+  
   cat(target, 'Number of DENTIST outliers detected:', n_dentist_s_outlier, '\n')
   df$dentist_outlier <- ifelse(df$R2 > r2_threshold & df$nlog10p_dentist_s > nlog10p_dentist_s_threshold, 1, 0)
   fwrite(df, paste0(target, '_locus_sumstat_flipcheck_with_dentist.txt.gz'), sep = '\t')
