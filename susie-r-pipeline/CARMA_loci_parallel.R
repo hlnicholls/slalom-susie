@@ -20,7 +20,7 @@ set.seed(1)
 #Check-list to run
 #All path directories are correct
 #All column names and SNP IDs match input data
-#PLINK directory is setup
+#PLINK directory is setup (line 115)
 #check sample size input for susie
 
 #need list of lead snps, lead snp ID expected to be in file name of LD matrix and sumstats
@@ -44,7 +44,7 @@ foreach(i = 1:nrow(lead_snps), .packages = c("data.table", "dplyr", "stringr", "
   ######################################################################################################
   # Read in sumstats and LD for locus (using lead SNP ID for target file name)
   
-  setwd("/Users/hn9/Documents/Analysis/Automated Scripts/susie-r/loci")
+  setwd("./susie-r-pipeline/loci")
   sumstat <- fread(paste0(target, '_locus_sumstat_flip_check.txt.gz'),
                    sep = "\t", header = TRUE, check.names = FALSE, data.table = FALSE,
                    stringsAsFactors = FALSE)
@@ -52,7 +52,7 @@ foreach(i = 1:nrow(lead_snps), .packages = c("data.table", "dplyr", "stringr", "
   ld <- fread(paste0(target, '_locus_ukbb_ld.txt.gz'),
               sep = "\t", header = TRUE, check.names = FALSE, data.table = FALSE,
               stringsAsFactors = FALSE)
-  setwd("/Users/hn9/Documents/Analysis/Automated Scripts/susie-r/intermediate-results")
+  setwd("./susie-r-pipeline/intermediate-results")
   ######################################################################################################
   ## Viewing if there is allele concordance between LD matrix and sum stats ##
   df1_transpose <- t(ld) # ld dataframe needs SNP IDs in columns
@@ -193,7 +193,7 @@ foreach(i = 1:nrow(lead_snps), .packages = c("data.table", "dplyr", "stringr", "
   sumstat.result$CM <- ifelse(row.names(sumstat.result) %in% CARMA.results[[1]]$`Credible model`[[1]][[1]], 1, 0)
   sumstat.result$CARMA_Outlier <- ifelse(row.names(sumstat.result) %in% CARMA.results[[1]]$Outlier$Index, 1, 0)
   
-  setwd("/Users/hn9/Documents/Analysis/Automated Scripts/susie-r/results")
+  setwd("./susie-r-pipeline/results")
   fwrite(
     x = sumstat.result,
     file = paste0(target, '_CARMA_locus_ukbb.txt.gz'),
