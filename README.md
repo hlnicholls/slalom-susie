@@ -3,9 +3,9 @@ Tested with python v3.10.8
 - Python example version of complete pipeline runs in ```slalom_susie_pipeline.py```
     - ```slalom_susie_pipeline.py``` runs with any GWAS catalog study locus and using the UKBiobank LD reference (using PLINK to get LD matrix).
 - PySpark work in progress for ETL pipeline in ```/etl-pipeline/pyspark_finemapping_pipeline.py``` 
-    - PySpark functions tested individually in ```pyspark_slalom_susie_pipeline.ipynb```
-    - ```/etl-pipeline/``` includes template/pseudocode for all scripts needed for ETL pipeline implementation
-- ```/old_pipeline``` scripts 1-4 can also run the same pipeline (steps originally coded in R)
+    - Functions developed and tested individually in ```slalom_susie_pipeline.ipynb``` and ```pyspark_slalom_susie_pipeline.ipynb```
+- ```/old_pipeline``` scripts 1-4 can also run the same pipeline (steps originally coded in R).
+- ```/susie-r-pipeline``` scripts for running fine-mapping pipelines in R in parallelised batches.
 
 # Installation
 
