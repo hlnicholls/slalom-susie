@@ -11,7 +11,7 @@ Scripts for running fine-mapping QC steps and fine-mapping via SuSiE or CARMA.
 Scripts:
 - `susie_single_locus.R` - Runs pipeline steps for an individual locus.
 - `susie_loci_for_loop.R` - Runs pipeline steps iteratively for a list of loci one by one.
-- `susie_loci_paralle.R` and `CARMA_loci_paralle.R` - Runs pipeline steps iteratively for batches of loci.
+- `susie_loci_parallel.R` and `CARMA_loci_parallel.R` - Runs pipeline steps iteratively for batches of loci.
 
 ### Requirements:
 - `loci_list.txt` - a file that contains all the lead SNPs for the loci. This is used as a file name identifier.
