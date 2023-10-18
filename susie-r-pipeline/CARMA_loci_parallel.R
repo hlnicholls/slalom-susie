@@ -28,7 +28,7 @@ lead_snps <- fread('/Users/hn9/Documents/Analysis/Automated Scripts/susie-r/loci
 lead_snps$target <- paste(lead_snps$chrom, lead_snps$pos, lead_snps$ref, lead_snps$alt, sep = "_")
 
 # Define the number of workers (adjust the value based on available CPU cores)
-num_workers <- 4
+num_workers <- 16
 
 cl <- makeCluster(num_workers)
 registerDoParallel(cl)
